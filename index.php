@@ -1,26 +1,1520 @@
 <?php
+
 declare(strict_types=1);
-const MAX_INPUT=26214400;
-function e(mixed $v):string{return htmlspecialchars((string)$v,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');}
-function scalar(mixed $v):string{if(is_bool($v))return $v?'true':'false';if($v===null)return'null';return is_scalar($v)?(string)$v:(json_encode($v,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)?:'');}
-function cfgGet(array $a,string $p,mixed $d=null):mixed{foreach(explode('.',$p) as $k){if(!is_array($a)||!array_key_exists($k,$a))return $d;$a=$a[$k];}return $a;}
-function flatten(mixed $v,string $p='',array &$o=[]):array{if(is_array($v)){if($v===[])$o[$p?:'$']=[];foreach($v as $k=>$x)flatten($x,$p===''?(string)$k:$p.'.'.$k,$o);}else$o[$p?:'$']=$v;return$o;}
-function expand(mixed $v,int $d=0):mixed{if($d>8)return$v;if(is_array($v)){foreach($v as $k=>$x)$v[$k]=expand($x,$d+1);return$v;}if(!is_string($v))return$v;$s=trim(html_entity_decode(strip_tags($v),ENT_QUOTES|ENT_HTML5,'UTF-8'));if(!in_array($s[0]??'',['{','['],true))return$v;$j=json_decode($s,true,128,JSON_BIGINT_AS_STRING);return json_last_error()===JSON_ERROR_NONE?expand($j,$d+1):$v;}
-function decodeLog(string $s):mixed{$s=trim($s);if($s==='')throw new RuntimeException('Kein Investigation-Log übergeben.');if(strlen($s)>MAX_INPUT)throw new RuntimeException('Der Log ist zu groß.');foreach(array_unique([$s,html_entity_decode($s,ENT_QUOTES|ENT_HTML5,'UTF-8'),trim(strip_tags(html_entity_decode($s,ENT_QUOTES|ENT_HTML5,'UTF-8')))])as$c){$j=json_decode($c,true,128,JSON_BIGINT_AS_STRING);if(json_last_error()===JSON_ERROR_NONE)return$j;}$rows=[];foreach(preg_split('/\R/u',$s)?:[]as$l){if(trim($l)==='')continue;$j=json_decode(trim($l),true,128,JSON_BIGINT_AS_STRING);if(json_last_error()!==JSON_ERROR_NONE){$rows=[];break;}$rows[]=$j;}if($rows)return$rows;throw new RuntimeException('Ungültiges JSON oder NDJSON: '.json_last_error_msg());}
-function packed(string $raw):string{return rtrim(strtr(base64_encode(gzdeflate($raw,9)),'+/','-_'),'=');}
-function unpacked(string $raw):string{$x=base64_decode(strtr($raw,'-_','+/'),true);if($x===false)throw new RuntimeException('Der Link enthält ungültige Daten.');$x=gzinflate($x);if($x===false)throw new RuntimeException('Der Link konnte nicht gelesen werden.');return$x;}
-function records(mixed $j,array$c):array{if(!is_array($j))return[['value'=>$j]];if(array_is_list($j))return$j?:[[]];foreach($c['record_containers']??[]as$p){$x=$j;foreach(explode('.',$p)as$k){if(!is_array($x)||!array_key_exists($k,$x)){continue 2;}$x=$x[$k];}if(is_array($x)&&array_is_list($x)&&$x)return$x;}return[$j];}
-function normalise(array$f,array$c):array{$o=[];foreach($c['field_aliases']??[]as$n=>$d){$al=$d['aliases']??$d;$type=$d['type']??'string';foreach($f as$p=>$v){$leaf=strtolower(preg_replace('/.*\./','',$p));$pn=strtolower(preg_replace('/[^a-z0-9]+/i','',$p));foreach((array)$al as$a){$an=strtolower(preg_replace('/[^a-z0-9]+/i','',(string)$a));if($leaf===strtolower((string)$a)||str_ends_with($pn,$an)){$x=$v;if($type==='boolean')$x=filter_var($v,FILTER_VALIDATE_BOOLEAN,FILTER_NULL_ON_FAILURE)??$v;elseif(in_array($type,['number','integer'],true)&&is_numeric($v))$x=$type==='integer'?(int)$v:(float)$v;elseif($type==='datetime'&&is_scalar($v)&&($t=strtotime((string)$v))!==false)$x=gmdate('c',$t);$o[$n][]=['path'=>$p,'value'=>$x];break;}}}}foreach($o as$n=>$a){$seen=[];$o[$n]=array_values(array_filter($a,function($x)use(&$seen){$k=json_encode($x);if(isset($seen[$k]))return false;$seen[$k]=1;return true;}));}return$o;}
-function regexOf(string$p):?string{if(@preg_match($p,'')!==false)return$p;$r='~'.str_replace('~','\\~',$p).'~iu';return @preg_match($r,'')===false?null:$r;}
-function entities(array$f,array$n,array$c):array{$o=[];foreach($c['entity_patterns']??[]as$t=>$d){foreach($f as$p=>$v){if(!is_scalar($v))continue;foreach((array)($d['patterns']??$d)as$pat){$r=regexOf((string)$pat);if(!$r||@preg_match_all($r,(string)$v,$m)===false)continue;foreach($m[1]??$m[0]??[]as$x){$x=trim((string)$x," \t\n\r.,;:()[]{}<>\"'");if($x!=='')$o[$t][strtolower($x)]=['value'=>$x,'path'=>$p,'confidence'=>$d['confidence']??70];}}}}foreach($c['entity_fields']??[]as$t=>$fs)foreach((array)$fs as$fn)foreach($n[$fn]??[]as$x)if(scalar($x['value'])!=='')$o[$t][strtolower(scalar($x['value']))]=['value'=>scalar($x['value']),'path'=>$x['path'],'confidence'=>95];foreach($o as$t=>$x)$o[$t]=array_values($x);ksort($o);return$o;}
-function cond(array$q,string$hay,array$n,array$e,array$events):bool{if(!$q)return false;if(isset($q['all'])){foreach($q['all']as$x)if(!cond($x,$hay,$n,$e,$events))return false;return true;}if(isset($q['any'])){foreach($q['any']as$x)if(cond($x,$hay,$n,$e,$events))return true;return false;}if(isset($q['not']))return!cond($q['not'],$hay,$n,$e,$events);if(isset($q['any_text'])){foreach((array)$q['any_text']as$x)if($x!==''&&str_contains($hay,strtolower((string)$x)))return true;return false;}if(isset($q['all_text'])){foreach((array)$q['all_text']as$x)if(!str_contains($hay,strtolower((string)$x)))return false;return true;}if(isset($q['event']))return in_array($q['event'],array_column($events,'id'),true);if(isset($q['entity']))return count($e[$q['entity']]??[])>=($q['min']??1);if(isset($q['field'])){$vals=array_column($n[$q['field']]??[],'value');if(array_key_exists('exists',$q))return(bool)$q['exists']===($vals!==[]);foreach($vals as$v){$s=strtolower(scalar($v));if(array_key_exists('equals',$q)&&$s===strtolower(scalar($q['equals'])))return true;if(isset($q['in'])&&in_array($s,array_map(fn($x)=>strtolower(scalar($x)),$q['in']),true))return true;if(isset($q['contains'])&&str_contains($s,strtolower($q['contains'])))return true;if(isset($q['gte'])&&is_numeric($v)&&$v>=$q['gte'])return true;}return false;}return false;}
-function analyse(array$r,array$c,int$i):array{$r=expand($r);$f=flatten($r);$n=normalise($f,$c);$e=entities($f,$n,$c);$hay=strtolower(implode("\n",array_map(fn($k,$v)=>$k.'='.scalar($v),array_keys($f),$f)));$events=[];foreach($c['event_catalog']??[]as$id=>$x)if(cond($x['when']??['any_text'=>$x['match']??[]],$hay,$n,$e,[]))$events[]=['id'=>$id]+$x;$products=[];foreach($c['product_catalog']??[]as$id=>$x)if(cond($x['when']??[],$hay,$n,$e,$events))$products[]=['id'=>$id]+$x;$find=[];foreach($c['rules']??[]as$x)if(($x['enabled']??true)&&cond($x['when']??[],$hay,$n,$e,$events))$find[]=$x;usort($find,fn($a,$b)=>($b['score']??0)<=>($a['score']??0));$score=min(100,max(0,array_sum(array_column($find,'score'))));$sev=['id'=>'unknown','label'=>'Unbekannt','color'=>'#777'];foreach($c['severity_levels']??[]as$id=>$x)if($score>=($x['min']??0)&&$score<=($x['max']??100)){$sev=['id'=>$id]+$x;break;}$title=$events[0]['summary']??($n['operation'][0]['value']??$n['action'][0]['value']??'Sicherheitsereignis');$timeline=[];foreach($c['timeline_fields']??['timestamp']as$tf)foreach($n[$tf]??[]as$x)$timeline[]=['time'=>$x['value'],'path'=>$x['path']];$mit=[];foreach(array_merge($events,$find)as$x)foreach($x['mitre']??[]as$m)$mit[$m]=['id'=>$m]+($c['mitre_catalog'][$m]??[]);return compact('i','title','score','sev','events','products','find','e','n','timeline','mit','f');}
-$config=[];$error=null;$raw='';$result=null;
-try{$cf=__DIR__.'/data.json';if(!is_readable($cf))throw new RuntimeException('data.json fehlt oder ist nicht lesbar.');$config=json_decode((string)file_get_contents($cf),true,128,JSON_THROW_ON_ERROR|JSON_BIGINT_AS_STRING);if(isset($_GET['clear'])){header('Location: '.strtok($_SERVER['REQUEST_URI'],'?'));exit;}if($_SERVER['REQUEST_METHOD']==='POST'){$raw=(string)($_POST['log']??'');decodeLog($raw);header('Location: '.strtok($_SERVER['REQUEST_URI'],'?').'?d='.rawurlencode(packed($raw)));exit;}if(isset($_GET['d']))$raw=unpacked((string)$_GET['d']);if($raw!==''){$j=decodeLog($raw);$rs=records($j,$config);$out=[];foreach($rs as$i=>$r)$out[]=analyse(is_array($r)?$r:['value'=>$r],$config,$i+1);$result=['records'=>$out,'count'=>count($out),'raw'=>$raw];}}catch(Throwable$x){$error=$x->getMessage();}
+
+const MAX_INPUT_BYTES = 26214400;
+
+function escapeHtml(mixed $value): string
+{
+    return htmlspecialchars(
+        (string)$value,
+        ENT_QUOTES | ENT_SUBSTITUTE,
+        'UTF-8'
+    );
+}
+
+function valueToText(mixed $value): string
+{
+    if (is_bool($value)) {
+        return $value ? 'Ja' : 'Nein';
+    }
+
+    if ($value === null) {
+        return '';
+    }
+
+    if (is_scalar($value)) {
+        return trim((string)$value);
+    }
+
+    return json_encode(
+        $value,
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    ) ?: '';
+}
+
+function decodeInvestigation(string $input): mixed
+{
+    $input = trim($input);
+
+    if ($input === '') {
+        throw new RuntimeException(
+            'Keine Investigation eingefügt.'
+        );
+    }
+
+    if (strlen($input) > MAX_INPUT_BYTES) {
+        throw new RuntimeException(
+            'Die Investigation ist zu groß.'
+        );
+    }
+
+    $htmlDecoded = html_entity_decode(
+        $input,
+        ENT_QUOTES | ENT_HTML5,
+        'UTF-8'
+    );
+
+    $candidates = array_unique([
+        $input,
+        $htmlDecoded,
+        trim(strip_tags($htmlDecoded))
+    ]);
+
+    foreach ($candidates as $candidate) {
+        $decoded = json_decode(
+            $candidate,
+            true,
+            128,
+            JSON_BIGINT_AS_STRING
+        );
+
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $decoded;
+        }
+    }
+
+    $records = [];
+
+    foreach (preg_split('/\R/u', $input) ?: [] as $line) {
+        $line = trim($line);
+
+        if ($line === '') {
+            continue;
+        }
+
+        $decoded = json_decode(
+            $line,
+            true,
+            128,
+            JSON_BIGINT_AS_STRING
+        );
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $records = [];
+            break;
+        }
+
+        $records[] = $decoded;
+    }
+
+    if ($records !== []) {
+        return $records;
+    }
+
+    throw new RuntimeException(
+        'Ungültiges JSON oder NDJSON.'
+    );
+}
+
+function expandEmbeddedJson(
+    mixed $value,
+    int $depth = 0
+): mixed {
+    if ($depth > 8) {
+        return $value;
+    }
+
+    if (is_array($value)) {
+        foreach ($value as $key => $child) {
+            $value[$key] = expandEmbeddedJson(
+                $child,
+                $depth + 1
+            );
+        }
+
+        return $value;
+    }
+
+    if (!is_string($value)) {
+        return $value;
+    }
+
+    $candidate = trim(
+        html_entity_decode(
+            strip_tags($value),
+            ENT_QUOTES | ENT_HTML5,
+            'UTF-8'
+        )
+    );
+
+    if (!in_array(
+        $candidate[0] ?? '',
+        ['{', '['],
+        true
+    )) {
+        return $value;
+    }
+
+    $decoded = json_decode(
+        $candidate,
+        true,
+        128,
+        JSON_BIGINT_AS_STRING
+    );
+
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return $value;
+    }
+
+    return expandEmbeddedJson(
+        $decoded,
+        $depth + 1
+    );
+}
+
+function flattenJson(
+    mixed $value,
+    string $path = '',
+    array &$result = []
+): array {
+    if (is_array($value)) {
+        foreach ($value as $key => $child) {
+            $nextPath = $path === ''
+                ? (string)$key
+                : $path . '.' . $key;
+
+            flattenJson(
+                $child,
+                $nextPath,
+                $result
+            );
+        }
+
+        return $result;
+    }
+
+    $result[$path === '' ? '$' : $path] = $value;
+
+    return $result;
+}
+
+function encodeInvestigationState(
+    string $input
+): string {
+    $compressed = gzdeflate($input, 9);
+
+    if ($compressed === false) {
+        throw new RuntimeException(
+            'Die Investigation konnte nicht komprimiert werden.'
+        );
+    }
+
+    return rtrim(
+        strtr(
+            base64_encode($compressed),
+            '+/',
+            '-_'
+        ),
+        '='
+    );
+}
+
+function decodeInvestigationState(
+    string $state
+): string {
+    $padding = strlen($state) % 4;
+
+    if ($padding !== 0) {
+        $state .= str_repeat(
+            '=',
+            4 - $padding
+        );
+    }
+
+    $decoded = base64_decode(
+        strtr($state, '-_', '+/'),
+        true
+    );
+
+    if ($decoded === false) {
+        throw new RuntimeException(
+            'Die Investigation im Link ist ungültig.'
+        );
+    }
+
+    $inflated = @gzinflate($decoded);
+
+    if ($inflated === false) {
+        throw new RuntimeException(
+            'Die Investigation im Link konnte nicht gelesen werden.'
+        );
+    }
+
+    return $inflated;
+}
+
+function getNestedValue(
+    array $data,
+    string $path
+): mixed {
+    $current = $data;
+
+    foreach (explode('.', $path) as $segment) {
+        if (
+            !is_array($current) ||
+            !array_key_exists($segment, $current)
+        ) {
+            return null;
+        }
+
+        $current = $current[$segment];
+    }
+
+    return $current;
+}
+
+function extractRecords(
+    mixed $decoded,
+    array $config
+): array {
+    if (!is_array($decoded)) {
+        return [
+            ['value' => $decoded]
+        ];
+    }
+
+    if (array_is_list($decoded)) {
+        if ($decoded === []) {
+            return [[]];
+        }
+
+        return array_map(
+            static fn(mixed $value): array =>
+                is_array($value)
+                    ? $value
+                    : ['value' => $value],
+            $decoded
+        );
+    }
+
+    foreach (
+        $config['record_containers'] ?? []
+        as $path
+    ) {
+        $records = getNestedValue(
+            $decoded,
+            (string)$path
+        );
+
+        if (
+            is_array($records) &&
+            array_is_list($records) &&
+            $records !== []
+        ) {
+            return array_map(
+                static fn(mixed $value): array =>
+                    is_array($value)
+                        ? $value
+                        : ['value' => $value],
+                $records
+            );
+        }
+    }
+
+    return [$decoded];
+}
+
+function normalizeFields(
+    array $flat,
+    array $config
+): array {
+    $normalized = [];
+
+    foreach (
+        $config['field_aliases'] ?? []
+        as $canonical => $definition
+    ) {
+        $aliases = $definition['aliases']
+            ?? $definition;
+
+        foreach ($flat as $path => $value) {
+            $leaf = strtolower(
+                (string)preg_replace(
+                    '/.*\./',
+                    '',
+                    $path
+                )
+            );
+
+            $compactPath = strtolower(
+                (string)preg_replace(
+                    '/[^a-z0-9]+/i',
+                    '',
+                    $path
+                )
+            );
+
+            foreach ((array)$aliases as $alias) {
+                $alias = strtolower(
+                    (string)$alias
+                );
+
+                $compactAlias = strtolower(
+                    (string)preg_replace(
+                        '/[^a-z0-9]+/i',
+                        '',
+                        $alias
+                    )
+                );
+
+                $matches =
+                    $leaf === $alias ||
+                    (
+                        $compactAlias !== '' &&
+                        str_ends_with(
+                            $compactPath,
+                            $compactAlias
+                        )
+                    );
+
+                if (!$matches) {
+                    continue;
+                }
+
+                $text = valueToText($value);
+
+                if (
+                    $text !== '' &&
+                    !in_array(
+                        $text,
+                        $normalized[
+                            (string)$canonical
+                        ] ?? [],
+                        true
+                    )
+                ) {
+                    $normalized[
+                        (string)$canonical
+                    ][] = $text;
+                }
+
+                break;
+            }
+        }
+    }
+
+    return $normalized;
+}
+
+function createSearchText(
+    array $flat
+): string {
+    $parts = [];
+
+    foreach ($flat as $path => $value) {
+        $parts[] =
+            $path . '=' . valueToText($value);
+    }
+
+    return strtolower(
+        implode("\n", $parts)
+    );
+}
+
+function matchesCondition(
+    array $condition,
+    string $searchText,
+    array $normalized,
+    array $events
+): bool {
+    if ($condition === []) {
+        return false;
+    }
+
+    if (isset($condition['all'])) {
+        foreach ($condition['all'] as $part) {
+            if (
+                !matchesCondition(
+                    (array)$part,
+                    $searchText,
+                    $normalized,
+                    $events
+                )
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    if (isset($condition['any'])) {
+        foreach ($condition['any'] as $part) {
+            if (
+                matchesCondition(
+                    (array)$part,
+                    $searchText,
+                    $normalized,
+                    $events
+                )
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    if (isset($condition['not'])) {
+        return !matchesCondition(
+            (array)$condition['not'],
+            $searchText,
+            $normalized,
+            $events
+        );
+    }
+
+    if (isset($condition['event'])) {
+        return in_array(
+            (string)$condition['event'],
+            array_column($events, 'id'),
+            true
+        );
+    }
+
+    if (isset($condition['any_text'])) {
+        foreach (
+            (array)$condition['any_text']
+            as $needle
+        ) {
+            if (
+                $needle !== '' &&
+                str_contains(
+                    $searchText,
+                    strtolower((string)$needle)
+                )
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    if (isset($condition['all_text'])) {
+        foreach (
+            (array)$condition['all_text']
+            as $needle
+        ) {
+            if (
+                !str_contains(
+                    $searchText,
+                    strtolower((string)$needle)
+                )
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    if (!isset($condition['field'])) {
+        return false;
+    }
+
+    $values = $normalized[
+        (string)$condition['field']
+    ] ?? [];
+
+    if (array_key_exists(
+        'exists',
+        $condition
+    )) {
+        return
+            (bool)$condition['exists'] ===
+            ($values !== []);
+    }
+
+    foreach ($values as $value) {
+        $lowerValue = strtolower($value);
+
+        if (
+            array_key_exists(
+                'equals',
+                $condition
+            ) &&
+            $lowerValue === strtolower(
+                valueToText(
+                    $condition['equals']
+                )
+            )
+        ) {
+            return true;
+        }
+
+        if (
+            isset($condition['contains']) &&
+            str_contains(
+                $lowerValue,
+                strtolower(
+                    (string)$condition['contains']
+                )
+            )
+        ) {
+            return true;
+        }
+
+        if (
+            isset($condition['in']) &&
+            in_array(
+                $lowerValue,
+                array_map(
+                    static fn(mixed $item): string =>
+                        strtolower(
+                            valueToText($item)
+                        ),
+                    (array)$condition['in']
+                ),
+                true
+            )
+        ) {
+            return true;
+        }
+
+        if (
+            isset($condition['gte']) &&
+            is_numeric($value) &&
+            (float)$value >=
+            (float)$condition['gte']
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function collectValues(
+    array $normalized,
+    array $fields,
+    int $limit
+): array {
+    $result = [];
+
+    foreach ($fields as $field) {
+        foreach (
+            $normalized[$field] ?? []
+            as $value
+        ) {
+            if (
+                $value !== '' &&
+                !in_array(
+                    $value,
+                    $result,
+                    true
+                )
+            ) {
+                $result[] = $value;
+            }
+
+            if (count($result) >= $limit) {
+                return $result;
+            }
+        }
+    }
+
+    return $result;
+}
+
+function analyzeRecord(
+    array $record,
+    array $config
+): array {
+    $expanded = expandEmbeddedJson($record);
+    $flat = flattenJson($expanded);
+    $normalized = normalizeFields(
+        $flat,
+        $config
+    );
+    $searchText = createSearchText($flat);
+
+    $events = [];
+
+    foreach (
+        $config['event_catalog'] ?? []
+        as $id => $event
+    ) {
+        $condition = $event['when']
+            ?? [
+                'any_text' =>
+                    $event['match'] ?? []
+            ];
+
+        if (
+            matchesCondition(
+                (array)$condition,
+                $searchText,
+                $normalized,
+                []
+            )
+        ) {
+            $events[] = [
+                'id' => (string)$id
+            ] + $event;
+        }
+    }
+
+    $sources = [];
+
+    foreach (
+        $config['product_catalog'] ?? []
+        as $id => $product
+    ) {
+        if (
+            matchesCondition(
+                (array)($product['when'] ?? []),
+                $searchText,
+                $normalized,
+                $events
+            )
+        ) {
+            $sources[] = (string)(
+                $product['name'] ?? $id
+            );
+        }
+    }
+
+    $findings = [];
+
+    foreach (
+        $config['rules'] ?? []
+        as $rule
+    ) {
+        if (
+            ($rule['enabled'] ?? true) &&
+            matchesCondition(
+                (array)($rule['when'] ?? []),
+                $searchText,
+                $normalized,
+                $events
+            )
+        ) {
+            $findings[] = $rule;
+        }
+    }
+
+    usort(
+        $findings,
+        static fn(array $a, array $b): int =>
+            (int)($b['score'] ?? 0) <=>
+            (int)($a['score'] ?? 0)
+    );
+
+    $score = min(
+        100,
+        max(
+            0,
+            (int)array_sum(
+                array_column(
+                    $findings,
+                    'score'
+                )
+            )
+        )
+    );
+
+    $severity = [
+        'label' => 'Informativ',
+        'color' => '#5f6368'
+    ];
+
+    foreach (
+        $config['severity_levels'] ?? []
+        as $level
+    ) {
+        if (
+            $score >=
+            (int)($level['min'] ?? 0) &&
+            $score <=
+            (int)($level['max'] ?? 100)
+        ) {
+            $severity = $level;
+            break;
+        }
+    }
+
+    $operation = collectValues(
+        $normalized,
+        ['operation', 'action'],
+        1
+    );
+
+    return [
+        'title' => (string)(
+            $events[0]['title']
+            ?? $operation[0]
+            ?? 'Sicherheitsereignis'
+        ),
+
+        'summary' => (string)(
+            $events[0]['summary']
+            ?? 'Das Ereignis wurde verarbeitet.'
+        ),
+
+        'severity' => $severity,
+        'score' => $score,
+
+        'source' => array_slice(
+            array_values(
+                array_unique($sources)
+            ),
+            0,
+            1
+        ),
+
+        'time' => collectValues(
+            $normalized,
+            [
+                'timestamp',
+                'event_time',
+                'creation_time'
+            ],
+            1
+        ),
+
+        'users' => collectValues(
+            $normalized,
+            [
+                'source_user',
+                'destination_user',
+                'user',
+                'email',
+                'display_name'
+            ],
+            3
+        ),
+
+        'systems' => collectValues(
+            $normalized,
+            [
+                'source_host',
+                'destination_host',
+                'host',
+                'device',
+                'source_ip',
+                'destination_ip',
+                'ip'
+            ],
+            3
+        ),
+
+        'objects' => collectValues(
+            $normalized,
+            [
+                'file_name',
+                'url',
+                'domain',
+                'resource',
+                'process'
+            ],
+            3
+        ),
+
+        'findings' => array_slice(
+            $findings,
+            0,
+            2
+        )
+    ];
+}
+
+function mergeUniqueValues(
+    array $analyses,
+    string $field,
+    int $limit
+): array {
+    $result = [];
+
+    foreach ($analyses as $analysis) {
+        foreach (
+            $analysis[$field] ?? []
+            as $value
+        ) {
+            if (
+                !in_array(
+                    $value,
+                    $result,
+                    true
+                )
+            ) {
+                $result[] = $value;
+            }
+
+            if (count($result) >= $limit) {
+                return $result;
+            }
+        }
+    }
+
+    return $result;
+}
+
+function mergeFindings(
+    array $analyses,
+    int $limit
+): array {
+    $findings = [];
+
+    foreach ($analyses as $analysis) {
+        foreach (
+            $analysis['findings'] ?? []
+            as $finding
+        ) {
+            $key =
+                $finding['id']
+                ?? $finding['title']
+                ?? md5(
+                    json_encode($finding)
+                );
+
+            $findings[$key] = $finding;
+        }
+    }
+
+    $findings = array_values($findings);
+
+    usort(
+        $findings,
+        static fn(array $a, array $b): int =>
+            (int)($b['score'] ?? 0) <=>
+            (int)($a['score'] ?? 0)
+    );
+
+    return array_slice(
+        $findings,
+        0,
+        $limit
+    );
+}
+
+$error = null;
+$result = null;
+
+try {
+    $configFile = __DIR__ . '/data.json';
+
+    if (!is_readable($configFile)) {
+        throw new RuntimeException(
+            'data.json fehlt oder ist nicht lesbar.'
+        );
+    }
+
+    $config = json_decode(
+        (string)file_get_contents($configFile),
+        true,
+        128,
+        JSON_THROW_ON_ERROR |
+        JSON_BIGINT_AS_STRING
+    );
+
+    if (
+        ($_SERVER['REQUEST_METHOD'] ?? 'GET')
+        === 'POST'
+    ) {
+        $input = (string)(
+            $_POST['log'] ?? ''
+        );
+
+        decodeInvestigation($input);
+
+        $basePath = strtok(
+            $_SERVER['REQUEST_URI'],
+            '?'
+        );
+
+        header(
+            'Location: ' .
+            $basePath .
+            '?d=' .
+            rawurlencode(
+                encodeInvestigationState($input)
+            )
+        );
+
+        exit;
+    }
+
+    if (isset($_GET['d'])) {
+        $input = decodeInvestigationState(
+            (string)$_GET['d']
+        );
+
+        $decoded = decodeInvestigation($input);
+
+        $records = extractRecords(
+            $decoded,
+            $config
+        );
+
+        $analyses = [];
+
+        foreach ($records as $record) {
+            $analyses[] = analyzeRecord(
+                is_array($record)
+                    ? $record
+                    : ['value' => $record],
+                $config
+            );
+        }
+
+        usort(
+            $analyses,
+            static fn(array $a, array $b): int =>
+                $b['score'] <=> $a['score']
+        );
+
+        $primary = $analyses[0];
+
+        $result = [
+            'primary' => $primary,
+            'event_count' => count($analyses),
+            'users' => mergeUniqueValues(
+                $analyses,
+                'users',
+                4
+            ),
+            'systems' => mergeUniqueValues(
+                $analyses,
+                'systems',
+                4
+            ),
+            'objects' => mergeUniqueValues(
+                $analyses,
+                'objects',
+                4
+            ),
+            'findings' => mergeFindings(
+                $analyses,
+                3
+            )
+        ];
+    }
+} catch (Throwable $exception) {
+    $error = $exception->getMessage();
+}
+
 ?>
-<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INV Analyzer</title><style>
-:root{color-scheme:dark;--bg:#090909;--bar:#151515;--panel:#202020;--panel2:#292929;--line:#3b3b3b;--text:#f1f1f1;--muted:#aaa;--red:#d9232e;--green:#4caf50;--orange:#e79b24}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Arial,sans-serif}.bar{height:58px;background:var(--bar);border-bottom:1px solid #303030;display:flex;align-items:center;padding:0 22px;gap:11px;position:sticky;top:0;z-index:5}.bar img{width:30px;height:30px;object-fit:contain}.bar strong{font-size:17px;letter-spacing:.03em}.trash{margin-left:auto;color:#ddd;background:transparent;border:0;padding:8px;cursor:pointer;display:grid;place-items:center}.trash:hover{color:#fff;background:#292929;border-radius:5px}.trash svg{width:22px;height:22px}.page{padding:24px 30px 42px;max-width:1600px}.page h1{font-size:21px;margin:0 0 19px}.input{max-width:1100px}textarea{display:block;width:100%;height:330px;background:#141414;color:#f1f1f1;border:1px solid var(--line);border-radius:4px;padding:15px;font:13px/1.5 Consolas,monospace;resize:vertical}textarea:focus{outline:1px solid var(--red);border-color:var(--red)}.submit{margin-top:11px;background:var(--red);color:#fff;border:0;border-radius:4px;padding:10px 19px;font-weight:bold;cursor:pointer}.error{margin-top:15px;color:#ff9191}.overview{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px;margin-bottom:18px}.metric,.box{background:var(--panel);border:1px solid var(--line);border-radius:4px}.metric{padding:13px}.metric span{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.metric b{font-size:18px}.event{margin-top:16px}.event-head{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--panel2);border:1px solid var(--line);border-bottom:0}.event-head h2{font-size:16px;margin:0}.score{margin-left:auto;color:var(--muted)}.columns{display:grid;grid-template-columns:minmax(320px,1.05fr) minmax(420px,1.5fr) minmax(280px,.9fr);gap:12px}.box{padding:14px;min-width:0}.box h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#ddd;margin:0 0 11px}.row{padding:8px 0;border-top:1px solid #343434;overflow-wrap:anywhere}.row:first-of-type{border-top:0}.label{color:var(--muted);font-size:12px}.tag{display:inline-block;background:#333;border:1px solid #484848;border-radius:3px;padding:4px 7px;margin:2px 3px 2px 0}.finding b{display:block;margin-bottom:3px}.plus{color:var(--orange)}.raw-grid{display:grid;grid-template-columns:minmax(220px,36%) 1fr;gap:1px;background:#3a3a3a;border:1px solid #3a3a3a;max-height:480px;overflow:auto}.raw-grid div{background:#181818;padding:7px 9px;overflow-wrap:anywhere;font:12px/1.4 Consolas,monospace}.raw-title{margin:16px 0 8px;font-size:13px;color:#ccc}.badge{padding:4px 8px;border-radius:3px;color:#fff;font-weight:bold}@media(max-width:1050px){.columns{grid-template-columns:1fr 1fr}.columns .full{grid-column:1/-1}.overview{grid-template-columns:1fr 1fr}}@media(max-width:680px){.page{padding:18px 14px}.columns{grid-template-columns:1fr}.overview{grid-template-columns:1fr 1fr}.bar{padding:0 14px}.bar strong{font-size:15px}}
-</style></head><body><header class="bar"><img src="red-magnifier.svg" alt=""><strong>INV Analyzer</strong><?php if($result):?><a class="trash" href="<?=e(strtok($_SERVER['REQUEST_URI'],'?'))?>" aria-label="Investigation löschen" title="Investigation löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg></a><?php endif;?></header><main class="page">
-<?php if(!$result):?><h1>IDR Investigation Analyzer</h1><form class="input" method="post"><textarea name="log" spellcheck="false" placeholder="Investigation json einfügen" required></textarea><button class="submit" type="submit">AUSWERTEN</button></form><?php if($error):?><div class="error"><?=e($error)?></div><?php endif;?>
-<?php else:$all=$result['records'];$max=max(array_column($all,'score'));$top=$all[array_search($max,array_column($all,'score'))];?><h1>IDR Investigation Analyzer</h1><section class="overview"><div class="metric"><span>Ereignisse</span><b><?=count($all)?></b></div><div class="metric"><span>Höchste Bewertung</span><b class="badge" style="background:<?=e($top['sev']['color']??'#777')?>"><?=e($top['sev']['label'])?></b></div><div class="metric"><span>Maximaler Score</span><b><?=e($max)?> / 100</b></div><div class="metric"><span>Erkannte Treffer</span><b><?=array_sum(array_map(fn($x)=>count($x['find']),$all))?></b></div></section>
-<?php foreach($all as$r):?><section class="event"><div class="event-head"><h2><?=e($r['i'].'. '.$r['title'])?></h2><span class="badge" style="background:<?=e($r['sev']['color']??'#777')?>"><?=e($r['sev']['label'])?></span><span class="score">Score <?=e($r['score'])?></span></div><div class="columns"><div class="box"><h3>Ereignis</h3><?php foreach($r['events'] as$x):?><div class="row"><b><?=e($x['title']??$x['id'])?></b><div><?=e($x['summary']??'')?></div></div><?php endforeach;?><?php if(!$r['events']):?><div class="row">Generisches Ereignis. Alle Felder wurden dennoch verarbeitet.</div><?php endif;?><h3 style="margin-top:16px">Quelle</h3><?php foreach($r['products'] as$x):?><span class="tag"><?=e($x['name']??$x['id'])?></span><?php endforeach;?><?php if(!$r['products']):?><span class="label">Nicht eindeutig erkannt</span><?php endif;?></div><div class="box"><h3>Relevante Informationen</h3><?php foreach($r['n'] as$k=>$xs):?><div class="row"><div class="label"><?=e($k)?></div><?=e(implode(', ',array_map(fn($x)=>scalar($x['value']),$xs)))?></div><?php endforeach;?></div><div class="box"><h3>Bewertung</h3><?php foreach($r['find'] as$x):?><div class="row finding"><b><?=e($x['title']??$x['id']??'Treffer')?> <span class="plus">+<?=e($x['score']??0)?></span></b><div><?=e($x['description']??'')?></div></div><?php endforeach;?><?php if(!$r['find']):?><div class="row">Keine regelbasierte Auffälligkeit erkannt.</div><?php endif;?><h3 style="margin-top:16px">Entitäten</h3><?php foreach($r['e'] as$k=>$xs):?><div class="row"><div class="label"><?=e($k)?></div><?php foreach($xs as$x):?><span class="tag"><?=e($x['value'])?></span><?php endforeach;?></div><?php endforeach;?></div></div><h3 class="raw-title">Vollständige Feldabdeckung</h3><div class="raw-grid"><?php foreach($r['f'] as$k=>$v):?><div><?=e($k)?></div><div><?=e(scalar($v))?></div><?php endforeach;?></div></section><?php endforeach;?><?php endif;?></main></body></html>
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
+    <link
+        rel="icon"
+        href="./favicon.svg"
+        type="image/svg+xml"
+    >
+
+    <title><?= $result === null
+        ? 'IDR Investigation Analyzer'
+        : 'Investigation'
+    ?></title>
+
+    <style>
+        :root {
+            color-scheme: dark;
+            --background: #080808;
+            --surface: #171717;
+            --surface-highlight: #202020;
+            --border: #343434;
+            --text: #f2f2f2;
+            --muted: #999999;
+            --red: #d71920;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            min-height: 100%;
+            margin: 0;
+            background: var(--background);
+            color: var(--text);
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+        }
+
+        .start-page {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 28px;
+        }
+
+        .start-content {
+            width: min(
+                760px,
+                calc(100vw - 40px)
+            );
+            text-align: left;
+        }
+
+        .start-content h1 {
+            margin: 0 0 16px;
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        .start-content textarea {
+            display: block;
+            width: 100%;
+            height: 280px;
+            padding: 14px;
+            resize: vertical;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            outline: none;
+            background: #121212;
+            color: var(--text);
+            font-family: Consolas, monospace;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .start-content textarea:focus {
+            border-color: var(--red);
+            outline: 1px solid var(--red);
+        }
+
+        .start-content button {
+            display: block;
+            margin: 12px auto 0;
+            padding: 10px 22px;
+            border: 0;
+            border-radius: 4px;
+            background: var(--red);
+            color: #ffffff;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .error {
+            margin-top: 12px;
+            color: #ff8e8e;
+        }
+
+        .result-page {
+            min-height: 100vh;
+            display: grid;
+            align-content: center;
+            padding: 18px 58px 18px 18px;
+        }
+
+        .trash {
+            position: fixed;
+            top: 14px;
+            right: 14px;
+            z-index: 10;
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: #181818;
+            color: #c8c8c8;
+            text-decoration: none;
+        }
+
+        .trash:hover {
+            border-color: #666666;
+            color: #ffffff;
+        }
+
+        .trash svg {
+            width: 19px;
+            height: 19px;
+        }
+
+        .investigation {
+            display: grid;
+            grid-template-columns:
+                minmax(220px, 0.85fr)
+                minmax(280px, 1.15fr)
+                minmax(280px, 1fr);
+            gap: 10px;
+            width: 100%;
+            max-width: 1500px;
+        }
+
+        .card {
+            min-width: 0;
+            padding: 14px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--surface);
+        }
+
+        .primary-card {
+            background: var(--surface-highlight);
+        }
+
+        .event-title {
+            margin-bottom: 8px;
+            overflow: hidden;
+            font-size: 18px;
+            font-weight: 700;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 9px;
+        }
+
+        .severity {
+            padding: 3px 7px;
+            border-radius: 3px;
+            color: #ffffff;
+            font-weight: 700;
+        }
+
+        .score {
+            color: var(--muted);
+        }
+
+        .summary {
+            line-height: 1.4;
+        }
+
+        .row {
+            padding: 7px 0;
+            overflow: hidden;
+            border-top: 1px solid #2c2c2c;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .summary + .row {
+            margin-top: 8px;
+        }
+
+        .label {
+            margin-bottom: 3px;
+            color: var(--muted);
+            font-size: 10px;
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+        }
+
+        .section-label {
+            margin-bottom: 7px;
+            color: #d5d5d5;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .finding {
+            line-height: 1.3;
+            white-space: normal;
+        }
+
+        .finding strong {
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .empty {
+            color: var(--muted);
+        }
+
+        @media (max-width: 900px) {
+            .result-page {
+                align-content: start;
+                padding-top: 58px;
+            }
+
+            .investigation {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .assessment {
+                grid-column: 1 / -1;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .start-page {
+                place-items: start center;
+                padding-top: 70px;
+            }
+
+            .start-content textarea {
+                height: 240px;
+            }
+
+            .result-page {
+                padding: 58px 12px 12px;
+            }
+
+            .investigation {
+                grid-template-columns: 1fr;
+            }
+
+            .assessment {
+                grid-column: auto;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<?php if ($result === null): ?>
+
+    <main class="start-page">
+        <section class="start-content">
+            <h1>IDR Investigation Analyzer</h1>
+
+            <form method="post">
+                <textarea
+                    name="log"
+                    spellcheck="false"
+                    placeholder="Investigation json einfügen"
+                    required
+                ></textarea>
+
+                <button type="submit">
+                    AUSWERTEN
+                </button>
+            </form>
+
+            <?php if ($error !== null): ?>
+                <div class="error">
+                    <?= escapeHtml($error) ?>
+                </div>
+            <?php endif; ?>
+        </section>
+    </main>
+
+<?php else: ?>
+
+    <?php $primary = $result['primary']; ?>
+
+    <main class="result-page">
+
+        <a
+            class="trash"
+            href="<?= escapeHtml(
+                strtok(
+                    $_SERVER['REQUEST_URI'],
+                    '?'
+                )
+            ) ?>"
+            aria-label="Investigation löschen"
+            title="Investigation löschen"
+        >
+            <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+            >
+                <path d="M4 7h16" />
+                <path d="M9 7V4h6v3" />
+                <path d="M7 7l1 13h8l1-13" />
+                <path d="M10 11v5" />
+                <path d="M14 11v5" />
+            </svg>
+        </a>
+
+        <section class="investigation">
+
+            <article class="card primary-card">
+                <div class="event-title">
+                    <?= escapeHtml(
+                        $primary['title']
+                    ) ?>
+                </div>
+
+                <div class="status">
+                    <span
+                        class="severity"
+                        style="background:<?= escapeHtml(
+                            $primary['severity']['color']
+                            ?? '#666666'
+                        ) ?>"
+                    >
+                        <?= escapeHtml(
+                            $primary['severity']['label']
+                            ?? 'Informativ'
+                        ) ?>
+                    </span>
+
+                    <span class="score">
+                        Score
+                        <?= escapeHtml(
+                            $primary['score']
+                        ) ?>
+                    </span>
+                </div>
+
+                <div class="summary">
+                    <?= escapeHtml(
+                        $primary['summary']
+                    ) ?>
+                </div>
+
+                <?php if ($primary['source']): ?>
+                    <div class="row">
+                        <div class="label">
+                            Quelle
+                        </div>
+
+                        <?= escapeHtml(
+                            implode(
+                                ' · ',
+                                $primary['source']
+                            )
+                        ) ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($primary['time']): ?>
+                    <div class="row">
+                        <div class="label">
+                            Zeit
+                        </div>
+
+                        <?= escapeHtml(
+                            $primary['time'][0]
+                        ) ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if (
+                    $result['event_count'] > 1
+                ): ?>
+                    <div class="row">
+                        <div class="label">
+                            Korrelierte Ereignisse
+                        </div>
+
+                        <?= escapeHtml(
+                            $result['event_count']
+                        ) ?>
+                    </div>
+                <?php endif; ?>
+            </article>
+
+            <article class="card">
+                <div class="section-label">
+                    Beteiligte und Ziel
+                </div>
+
+                <?php if ($result['users']): ?>
+                    <div class="row">
+                        <div class="label">
+                            Benutzer
+                        </div>
+
+                        <?= escapeHtml(
+                            implode(
+                                ' · ',
+                                $result['users']
+                            )
+                        ) ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($result['systems']): ?>
+                    <div class="row">
+                        <div class="label">
+                            Systeme / Adressen
+                        </div>
+
+                        <?= escapeHtml(
+                            implode(
+                                ' · ',
+                                $result['systems']
+                            )
+                        ) ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($result['objects']): ?>
+                    <div class="row">
+                        <div class="label">
+                            Objekte / Ressourcen
+                        </div>
+
+                        <?= escapeHtml(
+                            implode(
+                                ' · ',
+                                $result['objects']
+                            )
+                        ) ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if (
+                    !$result['users'] &&
+                    !$result['systems'] &&
+                    !$result['objects']
+                ): ?>
+                    <div class="empty">
+                        Keine weiteren relevanten
+                        Entitäten erkannt.
+                    </div>
+                <?php endif; ?>
+            </article>
+
+            <article class="card assessment">
+                <div class="section-label">
+                    Bewertung
+                </div>
+
+                <?php foreach (
+                    $result['findings']
+                    as $finding
+                ): ?>
+                    <div class="row finding">
+                        <strong>
+                            <?= escapeHtml(
+                                $finding['title']
+                                ?? $finding['id']
+                                ?? 'Treffer'
+                            ) ?>
+                        </strong>
+
+                        <?= escapeHtml(
+                            $finding['description']
+                            ?? ''
+                        ) ?>
+                    </div>
+                <?php endforeach; ?>
+
+                <?php if (
+                    !$result['findings']
+                ): ?>
+                    <div class="empty">
+                        Keine regelbasierte
+                        Auffälligkeit erkannt.
+                    </div>
+                <?php endif; ?>
+            </article>
+
+        </section>
+    </main>
+
+<?php endif; ?>
+
+</body>
+</html>
