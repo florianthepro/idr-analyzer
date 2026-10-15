@@ -260,6 +260,39 @@ function analyzeRecord(array $record, array $config): array {
     ];
 }
 
+function buildTicketSummary(array $result): string
+{
+    $primary = $result['primary'];
+    $lines = [
+        'Investigation: ' . ($primary['title'] ?? 'Sicherheitsereignis'),
+        'Bewertung: ' . ($primary['severity']['label'] ?? 'Informativ') . ' (Score ' . ($primary['score'] ?? 0) . '/100)',
+        'Zusammenfassung: ' . ($primary['summary'] ?? 'Das Ereignis wurde verarbeitet.')
+    ];
+
+    $append = static function (array &$target, string $label, array $values): void {
+        $values = array_values(array_unique(array_filter(array_map('strval', $values))));
+        if ($values !== []) $target[] = $label . ': ' . implode(', ', $values);
+    };
+
+    $append($lines, 'Quelle', $primary['source'] ?? []);
+    $append($lines, 'Zeit', $primary['time'] ?? []);
+    $append($lines, 'Benutzer', $result['users'] ?? []);
+    $append($lines, 'Systeme / Adressen', $result['systems'] ?? []);
+    $append($lines, 'Objekte / Ressourcen', $result['objects'] ?? []);
+    $append($lines, 'Kontext', $result['context'] ?? []);
+
+    if (($result['findings'] ?? []) !== []) {
+        $lines[] = 'Bewertungstreffer:';
+        foreach ($result['findings'] as $finding) {
+            $title = trim((string)($finding['title'] ?? $finding['id'] ?? 'Treffer'));
+            $description = trim((string)($finding['description'] ?? ''));
+            $lines[] = '- ' . $title . ($description !== '' ? ': ' . $description : '');
+        }
+    }
+
+    return implode("\n", $lines);
+}
+
 $error = null;
 $result = null;
 
@@ -312,7 +345,7 @@ try {
 <link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <title>IDR INV Analyzer</title>
 <style>
-:root{color-scheme:dark;--bg:#090909;--surface:#171717;--surface2:#202020;--line:#353535;--text:#f3f3f3;--muted:#a5a5a5;--red:#d71920}*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:14px Arial,sans-serif}.start{min-height:100vh;display:grid;place-items:center;padding:24px}.start-inner{width:min(820px,calc(100vw - 40px))}.start h1{margin:0 0 16px;font-size:22px}.start textarea{display:block;width:100%;height:300px;padding:14px;border:1px solid var(--line);border-radius:4px;outline:0;background:#131313;color:var(--text);font:13px/1.5 Consolas,monospace;resize:vertical}.start textarea:focus{border-color:var(--red);box-shadow:0 0 0 1px var(--red)}.start button{display:block;margin:12px auto 0;padding:10px 22px;border:0;border-radius:4px;background:var(--red);color:#fff;font-weight:700;cursor:pointer}.error{margin-top:12px;color:#ff9696}.result{min-height:100vh;display:grid;place-items:center;padding:54px 58px 30px 30px}.trash{position:fixed;top:14px;right:14px;z-index:5;display:grid;place-items:center;width:34px;height:34px;border:1px solid var(--line);border-radius:4px;background:#181818;color:#ccc;text-decoration:none}.trash:hover{color:#fff;border-color:#666}.trash svg{width:19px;height:19px}.investigation{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(420px,1.35fr);gap:12px;width:min(1180px,100%);align-items:stretch}.card{min-width:0;padding:16px;border:1px solid var(--line);border-radius:5px;background:var(--surface)}.main-card{background:var(--surface2)}.title{margin-bottom:8px;font-size:19px;font-weight:700;overflow-wrap:anywhere}.status{display:flex;align-items:center;gap:8px;margin-bottom:10px}.severity{padding:3px 7px;border-radius:3px;color:#fff;font-weight:700}.score{color:var(--muted)}.summary{line-height:1.45}.row{padding:8px 0;border-top:1px solid #303030;overflow-wrap:anywhere}.summary+.row{margin-top:9px}.label,.section-label{color:var(--muted);font-size:10px;letter-spacing:.07em;text-transform:uppercase}.label{margin-bottom:5px}.section-label{margin-bottom:9px;color:#ddd}.values{display:flex;flex-wrap:wrap;gap:5px}.value{display:inline-block;max-width:100%;padding:4px 7px;border:1px solid #404040;border-radius:3px;background:#262626;line-height:1.25;overflow-wrap:anywhere}.finding{line-height:1.4}.finding b{display:block;margin-bottom:2px}.empty{color:var(--muted)}@media(max-width:820px){.result{place-items:start;padding:54px 12px 20px}.investigation{grid-template-columns:1fr}}@media(max-width:600px){.start{place-items:start center;padding-top:60px}.start textarea{height:250px}}
+:root{color-scheme:dark;--bg:#090909;--surface:#171717;--surface2:#202020;--line:#353535;--text:#f3f3f3;--muted:#a5a5a5;--red:#d71920}*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:14px Arial,sans-serif}.start{min-height:100vh;display:grid;place-items:center;padding:24px}.start-inner{width:min(820px,calc(100vw - 40px))}.start h1{margin:0 0 16px;font-size:22px}.start textarea{display:block;width:100%;height:300px;padding:14px;border:1px solid var(--line);border-radius:4px;outline:0;background:#131313;color:var(--text);font:13px/1.5 Consolas,monospace;resize:vertical}.start textarea:focus{border-color:var(--red);box-shadow:0 0 0 1px var(--red)}.start button{display:block;margin:12px auto 0;padding:10px 22px;border:0;border-radius:4px;background:var(--red);color:#fff;font-weight:700;cursor:pointer}.error{margin-top:12px;color:#ff9696}.result{min-height:100vh;display:grid;place-items:center;padding:54px 58px 30px 30px}.tools{position:fixed;top:14px;right:14px;z-index:5;display:flex;gap:7px}.tool{display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid var(--line);border-radius:4px;background:#181818;color:#ccc;text-decoration:none;cursor:pointer}.tool:hover{color:#fff;border-color:#666}.tool svg{width:19px;height:19px}.tool.done{color:#74d680;border-color:#3d7650}.investigation{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(420px,1.35fr);gap:12px;width:min(1180px,100%);align-items:stretch}.card{min-width:0;padding:16px;border:1px solid var(--line);border-radius:5px;background:var(--surface)}.main-card{background:var(--surface2)}.title{margin-bottom:8px;font-size:19px;font-weight:700;overflow-wrap:anywhere}.status{display:flex;align-items:center;gap:8px;margin-bottom:10px}.severity{padding:3px 7px;border-radius:3px;color:#fff;font-weight:700}.score{color:var(--muted)}.summary{line-height:1.45}.row{padding:8px 0;border-top:1px solid #303030;overflow-wrap:anywhere}.summary+.row{margin-top:9px}.label,.section-label{color:var(--muted);font-size:10px;letter-spacing:.07em;text-transform:uppercase}.label{margin-bottom:5px}.section-label{margin-bottom:9px;color:#ddd}.values{display:flex;flex-wrap:wrap;gap:5px}.value{display:inline-block;max-width:100%;padding:4px 7px;border:1px solid #404040;border-radius:3px;background:#262626;line-height:1.25;overflow-wrap:anywhere}.finding{line-height:1.4}.finding b{display:block;margin-bottom:2px}.empty{color:var(--muted)}@media(max-width:820px){.result{place-items:start;padding:54px 12px 20px}.investigation{grid-template-columns:1fr}}@media(max-width:600px){.start{place-items:start center;padding-top:60px}.start textarea{height:250px}}
 </style>
 </head>
 <body>
@@ -329,9 +362,11 @@ try {
 </main>
 <?php else: $primary = $result['primary']; ?>
 <main class="result">
-  <a class="trash" href="<?=h(strtok($_SERVER['REQUEST_URI'], '?'))?>" aria-label="Investigation löschen" title="Investigation löschen">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg>
-  </a>
+  <div class="tools" aria-label="Investigation-Aktionen">
+    <button class="tool" id="share-link" type="button" title="Investigation-Link kopieren" aria-label="Investigation-Link kopieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.1-1.1"/></svg></button>
+    <button class="tool" id="copy-summary" type="button" title="Ticket-Zusammenfassung kopieren" aria-label="Ticket-Zusammenfassung kopieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
+    <a class="tool" href="<?=h(strtok($_SERVER['REQUEST_URI'], '?'))?>" title="Investigation löschen" aria-label="Investigation löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg></a>
+  </div>
 
   <section class="investigation">
     <article class="card main-card">
@@ -369,5 +404,62 @@ try {
   </section>
 </main>
 <?php endif; ?>
+
+<?php if ($result !== null): ?>
+<script>
+(() => {
+    const shareButton = document.getElementById('share-link');
+    const summaryButton = document.getElementById('copy-summary');
+    const ticketSummary = <?= json_encode(buildTicketSummary($result), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+    const shareLabel = 'idr-analyzer-investigation';
+
+    const markDone = (button) => {
+        button.classList.add('done');
+        window.setTimeout(() => button.classList.remove('done'), 1200);
+    };
+
+    const copyPlainText = async (text) => {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+    };
+
+    shareButton.addEventListener('click', async () => {
+        const url = window.location.href;
+        const escapedUrl = url.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const html = `<a href="${escapedUrl}">${shareLabel}</a>`;
+        try {
+            if (navigator.clipboard && window.isSecureContext && window.ClipboardItem) {
+                await navigator.clipboard.write([new ClipboardItem({
+                    'text/plain': new Blob([`${shareLabel}\n${url}`], {type: 'text/plain'}),
+                    'text/html': new Blob([html], {type: 'text/html'})
+                })]);
+            } else {
+                await copyPlainText(`${shareLabel}\n${url}`);
+            }
+            markDone(shareButton);
+        } catch (error) {
+            await copyPlainText(`${shareLabel}\n${url}`);
+            markDone(shareButton);
+        }
+    });
+
+    summaryButton.addEventListener('click', async () => {
+        await copyPlainText(ticketSummary);
+        markDone(summaryButton);
+    });
+})();
+</script>
+<?php endif; ?>
+
 </body>
 </html>
